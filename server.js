@@ -108,10 +108,21 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ error: "Unable to save tuition." });
 });
 
-await client.connect();
-await client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION).createIndex({ code: 1 }, { unique: true });
+// Connect on first request, not on startup
+let isConnected = false;
 
-app.listen(PORT, () => {
-  console.log(`Tuition Tracker API listening on http://localhost:${PORT}`);
-  console.log(`MongoDB target: ${MONGODB_DATABASE}.${MONGODB_COLLECTION}`);
+async function connectDB() {
+  if (!isConnected) {
+    await client.connect();
+    await client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION)
+      .createIndex({ code: 1 }, { unique: true });
+    isConnected = true;
+  }
+}
+
+app.use(async (req, res, next) => {
+  await connectDB();
+  next();
 });
+
+export default app;
