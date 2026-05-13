@@ -5,11 +5,9 @@ import { MongoClient } from "mongodb";
 
 dotenv.config();
 
-const {
-  MONGODB_URI,
-  MONGODB_DATABASE = "tuition_tracker_new",
-  MONGODB_COLLECTION = "tuitions",
-} = process.env;
+const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DATABASE = process.env.MONGODB_DATABASE || "tuition_tracker_new";
+const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || "tuitions";
 
 if (!MONGODB_URI) {
   throw new Error("Missing MONGODB_URI. Create Backend/.env from .env.example.");
