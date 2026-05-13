@@ -121,7 +121,7 @@ app.delete("/tuitions/:code", async (request, response, next) => {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  response.status(500).json({ error: "Internal server error." });
+  response.status(500).json({ error: error.message });
 });
 
 export default app;
