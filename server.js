@@ -19,8 +19,28 @@ if (!MONGODB_URI) {
 const app = express();
 const client = new MongoClient(MONGODB_URI);
 
+let isConnected = false;
+
+async function connectDB() {
+  if (!isConnected) {
+    await client.connect();
+    await client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION)
+      .createIndex({ code: 1 }, { unique: true });
+    isConnected = true;
+  }
+}
+
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/health", (_request, response) => {
   response.json({ ok: true, database: MONGODB_DATABASE, collection: MONGODB_COLLECTION });
@@ -105,28 +125,7 @@ app.delete("/tuitions/:code", async (request, response, next) => {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  response.status(500).json({ error: "Unable to save tuition." });
-});
-
-// Connect on first request, not on startup
-let isConnected = false;
-
-async function connectDB() {
-  if (!isConnected) {
-    await client.connect();
-    await client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION)
-      .createIndex({ code: 1 }, { unique: true });
-    isConnected = true;
-  }
-}
-
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (error) {
-    next(error);
-  }
+  response.status(500).json({ error: "Internal server error." });
 });
 
 export default app;
