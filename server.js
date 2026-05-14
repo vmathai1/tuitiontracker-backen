@@ -94,9 +94,35 @@ app.post("/tuitions", async (request, response, next) => {
 
 app.get("/tuitions", async (request, response, next) => {
   try {
+    const { userId } = request.query;
     const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
-    const tuitions = await collection.find({}).sort({ updatedAt: -1 }).toArray();
+
+    const filter = userId ? { "members.userId": userId } : {};
+    const tuitions = await collection
+      .find(filter)
+      .sort({ updatedAt: -1 })
+      .toArray();
+
     response.json(tuitions);
+  } catch (error) { next(error); }
+});
+
+app.post("/tuitions/leave", async (request, response, next) => {
+  try {
+    const { code, userId } = request.body;
+
+    if (!code || !userId) {
+      return response.status(400).json({ error: "code and userId are required." });
+    }
+
+    const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
+
+    await collection.updateOne(
+      { code },
+      { $pull: { members: { userId } } }
+    );
+
+    response.json({ ok: true });
   } catch (error) { next(error); }
 });
 
