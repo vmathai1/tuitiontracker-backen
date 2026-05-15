@@ -4,7 +4,6 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import { MongoClient } from "mongodb";
-import { Resend } from "resend";
 
 dotenv.config();
 
@@ -12,9 +11,6 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DATABASE = process.env.MONGODB_DATABASE || "tuition_tracker_new";
 const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || "tuitions";
 const PORT = process.env.PORT || 3000;
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const APP_FROM_EMAIL = process.env.APP_FROM_EMAIL || "noreply@yourdomain.com";
-const APP_BASE_URL = process.env.APP_BASE_URL || "https://project-6kvyz.vercel.app";
 
 if (!MONGODB_URI) {
   throw new Error("Missing MONGODB_URI. Create a .env file with your MongoDB connection string.");
@@ -220,7 +216,7 @@ async function handleLogin(req, res, next) {
 app.post("/auth/login", handleLogin);
 app.post("/auth/signin", handleLogin);
 
-// Forgot password — generate token and email reset link
+// Forgot password — generate token and return it directly (no email)
 async function handleForgotPassword(req, res, next) {
   try {
     const { email } = req.body;
@@ -244,18 +240,7 @@ async function handleForgotPassword(req, res, next) {
       { $set: { resetToken: token, resetTokenExpiresAt: expiresAt } }
     );
 
-    if (RESEND_API_KEY) {
-      const resend = new Resend(RESEND_API_KEY);
-      const resetUrl = `${APP_BASE_URL}/auth/reset-password?token=${token}`;
-      await resend.emails.send({
-        from: APP_FROM_EMAIL,
-        to: email,
-        subject: "Reset your password",
-        html: `<p>Click the link below to reset your password. It expires in 1 hour.</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
-      });
-    }
-
-    res.json({ ok: true });
+    res.json({ ok: true, resetToken: token });
   } catch (error) { next(error); }
 }
 
