@@ -4,6 +4,7 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import { MongoClient } from "mongodb";
+import { Resend } from "resend";
 
 dotenv.config();
 
@@ -11,6 +12,9 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DATABASE = process.env.MONGODB_DATABASE || "tuition_tracker_new";
 const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || "tuitions";
 const PORT = process.env.PORT || 3000;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const APP_FROM_EMAIL = process.env.APP_FROM_EMAIL || "onboarding@resend.dev";
+const APP_BASE_URL = process.env.APP_BASE_URL || "https://project-6kvyz.vercel.app";
 
 if (!MONGODB_URI) {
   throw new Error("Missing MONGODB_URI. Create a .env file with your MongoDB connection string.");
@@ -216,7 +220,7 @@ async function handleLogin(req, res, next) {
 app.post("/auth/login", handleLogin);
 app.post("/auth/signin", handleLogin);
 
-// Forgot password — generate token and return it directly (no email)
+// Forgot password — hashed token, 15-min expiry, sends Universal Link via email
 async function handleForgotPassword(req, res, next) {
   try {
     const { email } = req.body;
@@ -224,23 +228,47 @@ async function handleForgotPassword(req, res, next) {
       return res.status(400).json({ error: "email is required." });
     }
 
+    const GENERIC_RESPONSE = { ok: true, message: "If this email exists, reset instructions were sent." };
+
     const collection = client.db(MONGODB_DATABASE).collection("users");
     const user = await collection.findOne({ email });
 
-    // Always respond 200 to avoid leaking which emails are registered
     if (!user) {
-      return res.json({ ok: true });
+      return res.json(GENERIC_RESPONSE);
     }
 
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
     await collection.updateOne(
       { email },
-      { $set: { resetToken: token, resetTokenExpiresAt: expiresAt } }
+      {
+        $set: {
+          resetTokenHash: tokenHash,
+          resetTokenExpiresAt: expiresAt,
+          resetTokenUsed: false
+        }
+      }
     );
 
-    res.json({ ok: true, resetToken: token });
+    if (RESEND_API_KEY) {
+      const resend = new Resend(RESEND_API_KEY);
+      const resetUrl = `${APP_BASE_URL}/reset-password?token=${rawToken}`;
+      await resend.emails.send({
+        from: APP_FROM_EMAIL,
+        to: email,
+        subject: "Reset your TuitionTracker password",
+        html: `
+          <p>You requested a password reset.</p>
+          <p>Tap the link below to reset your password. It expires in 15 minutes and can only be used once.</p>
+          <p><a href="${resetUrl}">${resetUrl}</a></p>
+          <p>If you didn't request this, you can ignore this email.</p>
+        `
+      });
+    }
+
+    res.json(GENERIC_RESPONSE);
   } catch (error) { next(error); }
 }
 
@@ -248,7 +276,7 @@ app.post("/auth/forgot-password", handleForgotPassword);
 app.post("/auth/password-reset", handleForgotPassword);
 app.post("/auth/request-password-reset", handleForgotPassword);
 
-// Reset password — verify token and update password
+// Reset password — verify hashed token, single-use, clears token on success
 async function handleResetPassword(req, res, next) {
   try {
     const { token, password } = req.body;
@@ -256,10 +284,12 @@ async function handleResetPassword(req, res, next) {
       return res.status(400).json({ error: "token and password are required." });
     }
 
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
     const collection = client.db(MONGODB_DATABASE).collection("users");
     const user = await collection.findOne({
-      resetToken: token,
-      resetTokenExpiresAt: { $gt: new Date() }
+      resetTokenHash: tokenHash,
+      resetTokenExpiresAt: { $gt: new Date() },
+      resetTokenUsed: false
     });
 
     if (!user) {
@@ -268,10 +298,10 @@ async function handleResetPassword(req, res, next) {
 
     const passwordHash = await bcrypt.hash(password, 12);
     await collection.updateOne(
-      { resetToken: token },
+      { resetTokenHash: tokenHash },
       {
-        $set: { passwordHash, updatedAt: new Date() },
-        $unset: { resetToken: "", resetTokenExpiresAt: "" }
+        $set: { passwordHash, updatedAt: new Date(), resetTokenUsed: true },
+        $unset: { resetTokenHash: "", resetTokenExpiresAt: "" }
       }
     );
 
@@ -345,6 +375,59 @@ app.delete("/auth/user/:userId", async (req, res, next) => {
 
     res.json({ ok: true, message: "Account and all associated data deleted." });
   } catch (error) { next(error); }
+});
+
+// ── Universal Links ────────────────────────────────────────────────────────────
+
+// Apple App Site Association — required for Universal Links
+app.get("/.well-known/apple-app-site-association", (_req, res) => {
+  res.json({
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appIDs: [process.env.APPLE_APP_ID || "TEAMID.com.yourname.TutionTracker"],
+          components: [
+            { "/": "/reset-password", comment: "Password reset deep link" }
+          ]
+        }
+      ]
+    }
+  });
+});
+
+// Browser fallback for reset-password link
+app.get("/reset-password", (req, res) => {
+  const { token } = req.query;
+  const appLink = `tuitiontracker://reset-password?token=${token || ""}`;
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Reset Password — TuitionTracker</title>
+        <style>
+          body { font-family: -apple-system, sans-serif; display: flex; align-items: center;
+                 justify-content: center; min-height: 100vh; margin: 0; background: #f5f5f7; }
+          .card { background: white; border-radius: 16px; padding: 40px; max-width: 400px;
+                  width: 90%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+          h1 { font-size: 22px; margin-bottom: 8px; }
+          p { color: #666; margin-bottom: 24px; }
+          a { display: inline-block; background: #007AFF; color: white; padding: 14px 28px;
+              border-radius: 10px; text-decoration: none; font-weight: 600; }
+        </style>
+        <script>window.location.href = "${appLink}";</script>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Reset Your Password</h1>
+          <p>Open the TuitionTracker app to set a new password.</p>
+          <a href="${appLink}">Open App</a>
+        </div>
+      </body>
+    </html>
+  `);
 });
 
 // ── Error Handler ──────────────────────────────────────────────────────────────
