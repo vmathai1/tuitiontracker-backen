@@ -386,7 +386,7 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
       apps: [],
       details: [
         {
-          appIDs: [process.env.APPLE_APP_ID || "TEAMID.com.yourname.TutionTracker"],
+          appIDs: [process.env.APPLE_APP_ID || "4D784QDDK6.com.varghese.tuitiontracker"],
           components: [
             { "/": "/reset-password", comment: "Password reset deep link" }
           ]
