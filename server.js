@@ -143,6 +143,45 @@ app.delete("/tuitions/:code", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+app.post("/auth/link", async (request, response, next) => {
+  try {
+    const { userId, provider, email, providerUserId } = request.body;
+
+    if (!userId || !provider) {
+      return response.status(400).json({ error: "userId and provider are required." });
+    }
+
+    const collection = client.db(MONGODB_DATABASE).collection("users");
+    const now = new Date();
+
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          userId,
+          provider,
+          email: email || null,
+          providerUserId: providerUserId || null,
+          updatedAt: now
+        },
+        $setOnInsert: { createdAt: now }
+      },
+      { upsert: true }
+    );
+
+    response.json({ ok: true, userId, provider });
+  } catch (error) { next(error); }
+});
+
+app.get("/auth/user/:userId", async (request, response, next) => {
+  try {
+    const collection = client.db(MONGODB_DATABASE).collection("users");
+    const user = await collection.findOne({ userId: request.params.userId });
+    if (!user) return response.status(404).json({ error: "User not found." });
+    response.json(user);
+  } catch (error) { next(error); }
+});
+
 app.use((error, _request, response, _next) => {
   console.error(error);
   response.status(500).json({ error: error.message });
