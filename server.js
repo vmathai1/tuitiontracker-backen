@@ -1,3 +1,4 @@
+import bcrypt from "bcrypt";
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
@@ -145,6 +146,47 @@ app.post("/tuitions/leave", async (req, res, next) => {
 });
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
+
+// Register with email + password (hashes password, stores in MongoDB)
+async function handleRegister(req, res, next) {
+  try {
+    const { userId, email, password } = req.body;
+    if (!userId || !email || !password) {
+      return res.status(400).json({ error: "userId, email, and password are required." });
+    }
+
+    const collection = client.db(MONGODB_DATABASE).collection("users");
+
+    const existing = await collection.findOne({ email });
+    if (existing && existing.userId !== userId) {
+      return res.status(409).json({ error: "Email already registered." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const now = new Date();
+
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          userId,
+          provider: "email",
+          email,
+          passwordHash,
+          updatedAt: now
+        },
+        $setOnInsert: { createdAt: now }
+      },
+      { upsert: true }
+    );
+
+    res.json({ ok: true, userId, provider: "email", email });
+  } catch (error) { next(error); }
+}
+
+app.post("/auth/register", handleRegister);
+app.post("/auth/signup", handleRegister);
+app.post("/auth/email", handleRegister);
 
 // Link Apple or Email account to anonymous userId
 app.post("/auth/link", async (req, res, next) => {
