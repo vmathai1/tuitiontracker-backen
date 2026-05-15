@@ -8,13 +8,16 @@ dotenv.config();
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DATABASE = process.env.MONGODB_DATABASE || "tuition_tracker_new";
 const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || "tuitions";
+const PORT = process.env.PORT || 3000;
 
 if (!MONGODB_URI) {
-  throw new Error("Missing MONGODB_URI. Create Backend/.env from .env.example.");
+  throw new Error("Missing MONGODB_URI. Create a .env file with your MongoDB connection string.");
 }
 
 const app = express();
 const client = new MongoClient(MONGODB_URI);
+
+// ── DB Connection ──────────────────────────────────────────────────────────────
 
 let isConnected = false;
 
@@ -24,8 +27,11 @@ async function connectDB() {
     await client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION)
       .createIndex({ code: 1 }, { unique: true });
     isConnected = true;
+    console.log(`Connected to MongoDB: ${MONGODB_DATABASE}`);
   }
 }
+
+// ── Middleware ─────────────────────────────────────────────────────────────────
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -39,37 +45,36 @@ app.use(async (req, res, next) => {
   }
 });
 
-app.get("/health", (_request, response) => {
-  response.json({ ok: true, database: MONGODB_DATABASE, collection: MONGODB_COLLECTION });
+// ── Health Check ───────────────────────────────────────────────────────────────
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, database: MONGODB_DATABASE, collection: MONGODB_COLLECTION });
 });
 
-app.post("/tuitions", async (request, response, next) => {
+// ── Tuitions ───────────────────────────────────────────────────────────────────
+
+// Create or update a tuition
+app.post("/tuitions", async (req, res, next) => {
   try {
-    const tuition = request.body;
+    const tuition = req.body;
 
     if (!tuition?.code || typeof tuition.code !== "string") {
-      response.status(400).json({ error: "Tuition code is required." });
-      return;
+      return res.status(400).json({ error: "Tuition code is required." });
     }
 
-    const databaseName = request.header("X-Tuition-Database") || MONGODB_DATABASE;
-    const collectionName = request.header("X-Tuition-Collection") || MONGODB_COLLECTION;
+    const databaseName = req.header("X-Tuition-Database") || MONGODB_DATABASE;
+    const collectionName = req.header("X-Tuition-Collection") || MONGODB_COLLECTION;
 
     if (databaseName !== MONGODB_DATABASE || collectionName !== MONGODB_COLLECTION) {
-      response.status(400).json({
+      return res.status(400).json({
         error: "Unexpected database target.",
         expected: { databaseName: MONGODB_DATABASE, collectionName: MONGODB_COLLECTION }
       });
-      return;
     }
 
     const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
     const now = new Date();
-    const document = {
-      ...tuition,
-      syncedAt: now,
-      updatedAt: now
-    };
+    const document = { ...tuition, syncedAt: now, updatedAt: now };
 
     const result = await collection.updateOne(
       { code: tuition.code },
@@ -80,80 +85,76 @@ app.post("/tuitions", async (request, response, next) => {
       { upsert: true }
     );
 
-    response.status(result.upsertedId ? 201 : 200).json({
+    res.status(result.upsertedId ? 201 : 200).json({
       ok: true,
       code: tuition.code,
       matchedCount: result.matchedCount,
       modifiedCount: result.modifiedCount,
       upsertedId: result.upsertedId
     });
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 });
 
-app.get("/tuitions", async (request, response, next) => {
+// Get all tuitions, optionally filtered by userId
+app.get("/tuitions", async (req, res, next) => {
   try {
-    const { userId } = request.query;
+    const { userId } = req.query;
     const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
-
     const filter = userId ? { "members.userId": userId } : {};
     const tuitions = await collection
       .find(filter)
       .sort({ updatedAt: -1 })
       .toArray();
-
-    response.json(tuitions);
+    res.json(tuitions);
   } catch (error) { next(error); }
 });
 
-app.post("/tuitions/leave", async (request, response, next) => {
+// Get a single tuition by code
+app.get("/tuitions/:code", async (req, res, next) => {
   try {
-    const { code, userId } = request.body;
-
-    if (!code || !userId) {
-      return response.status(400).json({ error: "code and userId are required." });
-    }
-
     const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
+    const tuition = await collection.findOne({ code: req.params.code });
+    if (!tuition) return res.status(404).json({ error: "Tuition not found." });
+    res.json(tuition);
+  } catch (error) { next(error); }
+});
 
+// Delete a tuition by code
+app.delete("/tuitions/:code", async (req, res, next) => {
+  try {
+    const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
+    await collection.deleteOne({ code: req.params.code });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// Leave a tuition (remove userId from members array)
+app.post("/tuitions/leave", async (req, res, next) => {
+  try {
+    const { code, userId } = req.body;
+    if (!code || !userId) {
+      return res.status(400).json({ error: "code and userId are required." });
+    }
+    const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
     await collection.updateOne(
       { code },
       { $pull: { members: { userId } } }
     );
-
-    response.json({ ok: true });
+    res.json({ ok: true });
   } catch (error) { next(error); }
 });
 
-app.get("/tuitions/:code", async (request, response, next) => {
-  try {
-    const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
-    const tuition = await collection.findOne({ code: request.params.code });
-    if (!tuition) return response.status(404).json({ error: "Tuition not found." });
-    response.json(tuition);
-  } catch (error) { next(error); }
-});
+// ── Auth ───────────────────────────────────────────────────────────────────────
 
-app.delete("/tuitions/:code", async (request, response, next) => {
+// Link Apple or Email account to anonymous userId
+app.post("/auth/link", async (req, res, next) => {
   try {
-    const collection = client.db(MONGODB_DATABASE).collection(MONGODB_COLLECTION);
-    await collection.deleteOne({ code: request.params.code });
-    response.json({ ok: true });
-  } catch (error) { next(error); }
-});
-
-app.post("/auth/link", async (request, response, next) => {
-  try {
-    const { userId, provider, email, providerUserId } = request.body;
-
+    const { userId, provider, email, providerUserId } = req.body;
     if (!userId || !provider) {
-      return response.status(400).json({ error: "userId and provider are required." });
+      return res.status(400).json({ error: "userId and provider are required." });
     }
-
     const collection = client.db(MONGODB_DATABASE).collection("users");
     const now = new Date();
-
     await collection.updateOne(
       { userId },
       {
@@ -168,23 +169,55 @@ app.post("/auth/link", async (request, response, next) => {
       },
       { upsert: true }
     );
-
-    response.json({ ok: true, userId, provider });
+    res.json({ ok: true, userId, provider });
   } catch (error) { next(error); }
 });
 
-app.get("/auth/user/:userId", async (request, response, next) => {
+// Get user account info
+app.get("/auth/user/:userId", async (req, res, next) => {
   try {
     const collection = client.db(MONGODB_DATABASE).collection("users");
-    const user = await collection.findOne({ userId: request.params.userId });
-    if (!user) return response.status(404).json({ error: "User not found." });
-    response.json(user);
+    const user = await collection.findOne({ userId: req.params.userId });
+    if (!user) return res.status(404).json({ error: "User not found." });
+    res.json(user);
   } catch (error) { next(error); }
 });
 
-app.use((error, _request, response, _next) => {
-  console.error(error);
-  response.status(500).json({ error: error.message });
+// Delete account and all associated data (required by Apple)
+app.delete("/auth/user/:userId", async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required." });
+    }
+
+    const db = client.db(MONGODB_DATABASE);
+
+    // 1. Remove user from all tuitions they are a member of
+    await db.collection(MONGODB_COLLECTION).updateMany(
+      { "members.userId": userId },
+      { $pull: { members: { userId } } }
+    );
+
+    // 2. Delete tuitions that now have no members (orphaned tuitions)
+    await db.collection(MONGODB_COLLECTION).deleteMany({
+      members: { $size: 0 }
+    });
+
+    // 3. Delete the user record
+    await db.collection("users").deleteOne({ userId });
+
+    res.json({ ok: true, message: "Account and all associated data deleted." });
+  } catch (error) { next(error); }
 });
+
+// ── Error Handler ──────────────────────────────────────────────────────────────
+
+app.use((error, _req, res, _next) => {
+  console.error(error);
+  res.status(500).json({ error: error.message || "Something went wrong." });
+});
+
+// ── Export for Vercel ──────────────────────────────────────────────────────────
 
 export default app;
