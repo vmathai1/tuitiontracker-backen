@@ -188,6 +188,33 @@ app.post("/auth/register", handleRegister);
 app.post("/auth/signup", handleRegister);
 app.post("/auth/email", handleRegister);
 
+// Login with email + password
+async function handleLogin(req, res, next) {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "email and password are required." });
+    }
+
+    const collection = client.db(MONGODB_DATABASE).collection("users");
+    const user = await collection.findOne({ email });
+
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    const match = await bcrypt.compare(password, user.passwordHash);
+    if (!match) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+
+    res.json({ ok: true, userId: user.userId, email: user.email, provider: user.provider });
+  } catch (error) { next(error); }
+}
+
+app.post("/auth/login", handleLogin);
+app.post("/auth/signin", handleLogin);
+
 // Link Apple or Email account to anonymous userId
 app.post("/auth/link", async (req, res, next) => {
   try {
